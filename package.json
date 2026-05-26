@@ -1,6 +1,6 @@
 {
   "name": "thud.sh",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/reobin/thud.sh.git"
