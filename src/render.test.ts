@@ -1089,6 +1089,134 @@ describe("render", () => {
     expect(selectedPaneChunk?.bg?.slot).toBe(235);
   });
 
+  test("matches the selected pane style on its window label", () => {
+    const output = renderSessions(
+      [
+        session({
+          windows: [
+            window({
+              index: 1,
+              name: "editor",
+              panes: [pane({ id: "%1", processName: "opencode" })],
+            }),
+            window({
+              id: "@2",
+              index: 2,
+              name: "server",
+              panes: [pane({ id: "%2", processName: "bash" })],
+            }),
+          ],
+        }),
+      ],
+      "$1",
+      { highlightSelected: true, selectedPaneId: "%2" },
+    );
+    const selectedWindowLabel = output.chunks.find((chunk) => chunk.text === "2:server");
+    const otherWindowLabel = output.chunks.find((chunk) => chunk.text === "1:editor");
+
+    expect(selectedWindowLabel?.attributes).toBe(createTextAttributes({ bold: true }));
+    expect(selectedWindowLabel?.fg?.slot).toBe(14);
+    expect(selectedWindowLabel?.bg?.slot).toBe(235);
+    expect(otherWindowLabel?.attributes).toBe(0);
+    expect(otherWindowLabel?.fg?.slot).toBe(8);
+    expect(otherWindowLabel?.bg?.slot).toBe(235);
+  });
+
+  test("uses the attached session status color for selected pane window labels", () => {
+    const output = renderSessions(
+      [
+        session({
+          attached: true,
+          windows: [
+            window({
+              index: 1,
+              name: "editor",
+              panes: [
+                pane({
+                  id: "%1",
+                  processName: "opencode",
+                  integration: { tool: "opencode", status: "waiting" },
+                }),
+              ],
+            }),
+            window({ id: "@2", index: 2, name: "server", panes: [pane({ id: "%2" })] }),
+          ],
+        }),
+      ],
+      "$1",
+      { highlightSelected: true, selectedPaneId: "%1" },
+    );
+    const selectedWindowLabel = output.chunks.find((chunk) => chunk.text === "1:editor");
+
+    expect(selectedWindowLabel?.attributes).toBe(createTextAttributes({ bold: true }));
+    expect(selectedWindowLabel?.fg?.slot).toBe(5);
+    expect(selectedWindowLabel?.bg?.slot).toBe(235);
+  });
+
+  test("matches the active pane style on its window label", () => {
+    const output = renderSessions([
+      session({
+        attached: true,
+        windows: [
+          window({
+            index: 1,
+            name: "editor",
+            active: false,
+            panes: [pane({ id: "%1", processName: "opencode", active: false })],
+          }),
+          window({
+            id: "@2",
+            index: 2,
+            name: "server",
+            active: true,
+            panes: [pane({ id: "%2", processName: "bash", active: true })],
+          }),
+        ],
+      }),
+    ]);
+    const activeWindowLabel = output.chunks.find((chunk) => chunk.text === "2:server");
+    const inactiveWindowLabel = output.chunks.find((chunk) => chunk.text === "1:editor");
+
+    expect(activeWindowLabel?.attributes).toBe(createTextAttributes({ bold: true }));
+    expect(activeWindowLabel?.fg?.slot).toBe(6);
+    expect(inactiveWindowLabel?.attributes).toBe(0);
+    expect(inactiveWindowLabel?.fg?.slot).toBe(8);
+  });
+
+  test("uses the attached session status color for active pane window labels", () => {
+    const output = renderSessions([
+      session({
+        attached: true,
+        windows: [
+          window({
+            index: 1,
+            name: "editor",
+            active: true,
+            panes: [
+              pane({
+                id: "%1",
+                processName: "opencode",
+                active: true,
+                integration: { tool: "opencode", status: "idle" },
+              }),
+            ],
+          }),
+          window({
+            id: "@2",
+            index: 2,
+            name: "server",
+            active: false,
+            panes: [pane({ id: "%2", active: false })],
+          }),
+        ],
+      }),
+    ]);
+    const activeWindowLabel = output.chunks.find((chunk) => chunk.text === "1:editor");
+
+    expect(activeWindowLabel?.attributes).toBe(createTextAttributes({ bold: true }));
+    expect(activeWindowLabel?.fg?.slot).toBe(10);
+  });
+
   test("uses the attached session status color for selected pane highlighting", () => {
     const output = renderSessions(
       [

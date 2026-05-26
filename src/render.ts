@@ -217,10 +217,19 @@ function renderSession(
   const showWindowLabels = session.windows.length > 1;
 
   session.windows.forEach((window) => {
+    const selectedPaneFg = sessionStatus ? sessionAccentFg : RGBA.fromIndex(palette.brightCyan);
+    const hasSelectedPane = isSelectedSession && window.panes.some((pane) => pane.id === selectedPaneId);
+    const activePane = window.active ? window.panes.find((pane) => pane.active) : undefined;
+    const activePaneFg =
+      session.attached && activePane
+        ? activePaneWindowLabelFg(session, activePane, sessionAccentFg)
+        : undefined;
+    const windowLabelFg = hasSelectedPane ? selectedPaneFg : activePaneFg;
+
     if (showWindowLabels) {
       const label = fitMiddle(`${window.index}:${window.name}`, windowLabelContentWidth(width));
 
-      chunks.push(muted(`\n${label}`, textMutedFg));
+      chunks.push(windowLabelFg ? bold(fg(windowLabelFg)(`\n${label}`)) : muted(`\n${label}`, textMutedFg));
     }
 
     window.panes.forEach((pane, paneIndex) => {
@@ -228,9 +237,7 @@ function renderSession(
       const branch = windowPaneBranch(window.panes.length, paneIndex);
       const rowChunks = [
         muted("\n", textMutedFg),
-        isSelectedPane
-          ? fg(sessionStatus ? sessionAccentFg : RGBA.fromIndex(palette.brightCyan))("▶─")
-          : muted(branch, textMutedFg),
+        isSelectedPane ? fg(selectedPaneFg)("▶─") : muted(branch, textMutedFg),
         ...renderPaneName(
           pane,
           session.attached && window.active && pane.active,
@@ -552,6 +559,18 @@ function renderPaneProcessName(
   }
 
   return isActive ? active(name) : textChunk(name);
+}
+
+function activePaneWindowLabelFg(
+  session: TmuxSession,
+  pane: TmuxPane,
+  sessionAccentFg: RGBA,
+): RGBA {
+  if (!session.sshAttached && !pane.ssh) {
+    return sessionAccentFg;
+  }
+
+  return RGBA.fromIndex(palette.magenta);
 }
 
 function renderStatusPill(pane: TmuxPane, textMutedFg: RGBA, now: Date | undefined): TextChunk[] {
