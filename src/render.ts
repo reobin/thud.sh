@@ -218,7 +218,8 @@ function renderSession(
 
   session.windows.forEach((window) => {
     const selectedPaneFg = sessionStatus ? sessionAccentFg : RGBA.fromIndex(palette.brightCyan);
-    const hasSelectedPane = isSelectedSession && window.panes.some((pane) => pane.id === selectedPaneId);
+    const hasSelectedPane =
+      isSelectedSession && window.panes.some((pane) => pane.id === selectedPaneId);
     const activePane = window.active ? window.panes.find((pane) => pane.active) : undefined;
     const activePaneFg =
       session.attached && activePane
@@ -229,7 +230,9 @@ function renderSession(
     if (showWindowLabels) {
       const label = fitMiddle(`${window.index}:${window.name}`, windowLabelContentWidth(width));
 
-      chunks.push(windowLabelFg ? bold(fg(windowLabelFg)(`\n${label}`)) : muted(`\n${label}`, textMutedFg));
+      chunks.push(
+        windowLabelFg ? bold(fg(windowLabelFg)(`\n${label}`)) : muted(`\n${label}`, textMutedFg),
+      );
     }
 
     window.panes.forEach((pane, paneIndex) => {
