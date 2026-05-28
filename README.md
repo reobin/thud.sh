@@ -77,6 +77,11 @@ PostToolUse = [{ hooks = [{ type = "command", command = "thud-codex-status" }] }
 Stop = [{ hooks = [{ type = "command", command = "thud-codex-status" }] }]
 ```
 
+`PermissionRequest` is required for approval prompts to show as `waiting`. Codex
+does not currently expose the same hook coverage for all interactive
+`request_user_input` questions, so those prompts may still appear as `running`
+until Codex emits a hook for that state.
+
 ## Development
 
 ```sh

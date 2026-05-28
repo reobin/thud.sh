@@ -13,6 +13,11 @@ type ProcessStat = ProcessIdentity & {
   ppid: string;
   name: string;
 };
+type CodexStatusContext = {
+  $: typeof Bun.$;
+  now?: () => number;
+  readEvent?: () => Promise<CodexHookEvent>;
+};
 
 const tool = "codex";
 const thudRefreshChannel = "thud-sh-sessions";
@@ -26,18 +31,30 @@ const statusByHookEvent = new Map([
   ["Stop", "idle"],
 ]);
 
-const pane = process.env.TMUX_PANE;
-const event = await readHookEvent();
-const status = statusByHookEvent.get(event.hook_event_name ?? "");
+export async function runThudCodexStatus({
+  $,
+  now = Date.now,
+  readEvent = readHookEvent,
+}: CodexStatusContext): Promise<void> {
+  const pane = process.env.TMUX_PANE;
+  const event = await readEvent();
+  const status = statusByHookEvent.get(event.hook_event_name ?? "");
 
-if (pane && status) {
+  if (!pane || !status) {
+    return;
+  }
+
   const owner = (await codexOwnerIdentity(process.pid.toString())) ?? {
     pid: process.ppid.toString(),
     startTime: (await processStartTime(process.ppid.toString())) ?? "",
   };
-  const updatedAt = Math.floor(Date.now() / 1000).toString();
+  const updatedAt = Math.floor(now() / 1000).toString();
 
-  await Bun.$`tmux set-option -p -t ${pane} @thud_sh_tool ${tool} \; set-option -p -t ${pane} @thud_sh_status ${status} \; set-option -p -t ${pane} @thud_sh_status_updated_at ${updatedAt} \; set-option -p -t ${pane} @thud_sh_owner_pid ${owner.pid} \; set-option -p -t ${pane} @thud_sh_owner_start_time ${owner.startTime} \; set-option -pu -t ${pane} @thud_sh_status_label \; wait-for -S ${thudRefreshChannel}`.quiet();
+  await $`tmux set-option -p -t ${pane} @thud_sh_tool ${tool} \; set-option -p -t ${pane} @thud_sh_status ${status} \; set-option -p -t ${pane} @thud_sh_status_updated_at ${updatedAt} \; set-option -p -t ${pane} @thud_sh_owner_pid ${owner.pid} \; set-option -p -t ${pane} @thud_sh_owner_start_time ${owner.startTime} \; set-option -pu -t ${pane} @thud_sh_status_label \; wait-for -S ${thudRefreshChannel}`.quiet();
+}
+
+if (import.meta.main) {
+  await runThudCodexStatus({ $: Bun.$ });
 }
 
 async function readHookEvent(): Promise<CodexHookEvent> {
