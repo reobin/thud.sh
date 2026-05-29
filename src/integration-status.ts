@@ -90,7 +90,7 @@ export function statusElapsedLabel(
   const elapsedMinutes = Math.floor(elapsedSeconds / 60);
 
   if (elapsedMinutes < 1) {
-    return "<1m";
+    return undefined;
   }
 
   if (elapsedMinutes < 60) {
