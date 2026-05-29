@@ -21,6 +21,7 @@ type CodexStatusContext = {
 
 const tool = "codex";
 const thudRefreshChannel = "thud-sh-sessions";
+const runningStartedAtOption = "@thud_sh_running_started_at";
 
 const statusByHookEvent = new Map([
   ["SessionStart", "idle"],
@@ -48,7 +49,24 @@ export async function runThudCodexStatus({
     pid: process.ppid.toString(),
     startTime: (await processStartTime(process.ppid.toString())) ?? "",
   };
-  const updatedAt = Math.floor(now() / 1000).toString();
+  const nowSeconds = Math.floor(now() / 1000).toString();
+  const runningStartedAt =
+    status === "running"
+      ? event.hook_event_name === "UserPromptSubmit"
+        ? nowSeconds
+        : (parseTimestamp(await paneOption($, pane, runningStartedAtOption)) ?? nowSeconds)
+      : undefined;
+  const updatedAt = runningStartedAt ?? nowSeconds;
+
+  if (runningStartedAt) {
+    await $`tmux set-option -p -t ${pane} @thud_sh_tool ${tool} \; set-option -p -t ${pane} @thud_sh_status ${status} \; set-option -p -t ${pane} @thud_sh_status_updated_at ${updatedAt} \; set-option -p -t ${pane} ${runningStartedAtOption} ${runningStartedAt} \; set-option -p -t ${pane} @thud_sh_owner_pid ${owner.pid} \; set-option -p -t ${pane} @thud_sh_owner_start_time ${owner.startTime} \; set-option -pu -t ${pane} @thud_sh_status_label \; wait-for -S ${thudRefreshChannel}`.quiet();
+    return;
+  }
+
+  if (status === "idle") {
+    await $`tmux set-option -p -t ${pane} @thud_sh_tool ${tool} \; set-option -p -t ${pane} @thud_sh_status ${status} \; set-option -p -t ${pane} @thud_sh_status_updated_at ${updatedAt} \; set-option -pu -t ${pane} ${runningStartedAtOption} \; set-option -p -t ${pane} @thud_sh_owner_pid ${owner.pid} \; set-option -p -t ${pane} @thud_sh_owner_start_time ${owner.startTime} \; set-option -pu -t ${pane} @thud_sh_status_label \; wait-for -S ${thudRefreshChannel}`.quiet();
+    return;
+  }
 
   await $`tmux set-option -p -t ${pane} @thud_sh_tool ${tool} \; set-option -p -t ${pane} @thud_sh_status ${status} \; set-option -p -t ${pane} @thud_sh_status_updated_at ${updatedAt} \; set-option -p -t ${pane} @thud_sh_owner_pid ${owner.pid} \; set-option -p -t ${pane} @thud_sh_owner_start_time ${owner.startTime} \; set-option -pu -t ${pane} @thud_sh_status_label \; wait-for -S ${thudRefreshChannel}`.quiet();
 }
@@ -63,6 +81,26 @@ async function readHookEvent(): Promise<CodexHookEvent> {
   } catch {
     return {};
   }
+}
+
+async function paneOption(
+  $: typeof Bun.$,
+  pane: string,
+  option: string,
+): Promise<string | undefined> {
+  const value = await $`tmux show-option -pv -t ${pane} ${option}`.nothrow().quiet().text();
+
+  return value.trim() || undefined;
+}
+
+function parseTimestamp(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+
+  if (!trimmed || !/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+
+  return Number(trimmed) > 0 ? trimmed : undefined;
 }
 
 async function codexOwnerIdentity(pid: string): Promise<ProcessIdentity | undefined> {

@@ -55,6 +55,33 @@ describe("runThudCodexStatus", () => {
     expect(statuses(shell.calls)).toEqual(["idle", "running", "running", "running", "idle"]);
   });
 
+  test("preserves Codex running start across tool and waiting hooks", async () => {
+    process.env.TMUX_PANE = "%1";
+    const shell = mockShell({ "@thud_sh_running_started_at": "1710000000" });
+
+    await runStatus("UserPromptSubmit", shell, 1_710_000_000_000);
+    await runStatus("PreToolUse", shell, 1_710_000_120_000);
+    await runStatus("PermissionRequest", shell, 1_710_000_150_000);
+    await runStatus("PostToolUse", shell, 1_710_000_180_000);
+
+    expect(updatedAtValues(shell.calls)).toEqual([
+      "1710000000",
+      "1710000000",
+      "1710000150",
+      "1710000000",
+    ]);
+    expect(shell.calls.some((call) => call.includes("show-option -pv"))).toBe(true);
+  });
+
+  test("clears Codex running start when returning to idle", async () => {
+    process.env.TMUX_PANE = "%1";
+    const shell = mockShell();
+
+    await runStatus("Stop", shell);
+
+    expect(shell.calls[0]).toContain("set-option -pu -t %1 @thud_sh_running_started_at");
+  });
+
   test("ignores unknown events and missing panes", async () => {
     const shell = mockShell();
 
@@ -120,10 +147,14 @@ describe("runThudCodexStatus", () => {
   });
 });
 
-async function runStatus(hookEventName: string, shell: { $: unknown }): Promise<void> {
+async function runStatus(
+  hookEventName: string,
+  shell: { $: unknown },
+  now = 1_710_000_000_000,
+): Promise<void> {
   await runThudCodexStatus({
     $: shell.$ as typeof Bun.$,
-    now: () => 1_710_000_000_000,
+    now: () => now,
     readEvent: async () => ({ hook_event_name: hookEventName }),
   });
 }
@@ -174,7 +205,7 @@ function procStat(pid: string, name: string, ppid: string, startTime: string): s
   return `${pid} (${name}) ${fields.join(" ")}`;
 }
 
-function mockShell(): { calls: string[]; $: unknown } {
+function mockShell(optionValues: Record<string, string> = {}): { calls: string[]; $: unknown } {
   const calls: string[] = [];
 
   return {
@@ -188,9 +219,21 @@ function mockShell(): { calls: string[]; $: unknown } {
 
       calls.push(command);
 
-      return {
-        quiet: async () => {},
+      const shellPromise = {
+        nothrow: () => shellPromise,
+        quiet: () => shellPromise,
+        text: async () => {
+          for (const [option, value] of Object.entries(optionValues)) {
+            if (command.includes(option)) {
+              return `${value}\n`;
+            }
+          }
+
+          return "";
+        },
       };
+
+      return shellPromise;
     },
   };
 }
@@ -198,6 +241,14 @@ function mockShell(): { calls: string[]; $: unknown } {
 function statuses(calls: string[]): string[] {
   return calls.flatMap((call) => {
     const match = call.match(/@thud_sh_status\s+(\S+)/);
+
+    return match?.[1] ? [match[1]] : [];
+  });
+}
+
+function updatedAtValues(calls: string[]): string[] {
+  return calls.flatMap((call) => {
+    const match = call.match(/@thud_sh_status_updated_at\s+(\S+)/);
 
     return match?.[1] ? [match[1]] : [];
   });
