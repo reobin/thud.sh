@@ -3,6 +3,8 @@ import { access, readFile } from "node:fs/promises";
 
 type CodexHookEvent = {
   hook_event_name?: string;
+  transcript_path?: string | null;
+  turn_id?: string;
 };
 
 type ProcessIdentity = {
@@ -17,11 +19,22 @@ type CodexStatusContext = {
   $: typeof Bun.$;
   now?: () => number;
   readEvent?: () => Promise<CodexHookEvent>;
+  startPermissionRequestWatcher?: (request: PermissionRequestWatchRequest) => void;
+};
+type PermissionRequestWatchRequest = {
+  pane: string;
+  owner: ProcessIdentity;
+  statusUpdatedAt: string;
+  transcriptPath: string;
+  turnId: string;
 };
 
 const tool = "codex";
 const thudRefreshChannel = "thud-sh-sessions";
 const runningStartedAtOption = "@thud_sh_running_started_at";
+const permissionRequestWatchArg = "--watch-permission-request";
+const permissionRequestWatchPollMs = 500;
+const permissionRequestWatchTimeoutMs = 24 * 60 * 60 * 1000;
 
 const statusByHookEvent = new Map([
   ["SessionStart", "idle"],
@@ -36,10 +49,12 @@ export async function runThudCodexStatus({
   $,
   now = Date.now,
   readEvent = readHookEvent,
+  startPermissionRequestWatcher = startDetachedPermissionRequestWatcher,
 }: CodexStatusContext): Promise<void> {
   const pane = process.env.TMUX_PANE;
   const event = await readEvent();
-  const status = statusByHookEvent.get(event.hook_event_name ?? "");
+  const hookEventName = event.hook_event_name ?? "";
+  const status = statusByHookEvent.get(hookEventName);
 
   if (!pane || !status) {
     return;
@@ -59,20 +74,252 @@ export async function runThudCodexStatus({
   const updatedAt = runningStartedAt ?? nowSeconds;
 
   if (runningStartedAt) {
-    await $`tmux set-option -p -t ${pane} @thud_sh_tool ${tool} \; set-option -p -t ${pane} @thud_sh_status ${status} \; set-option -p -t ${pane} @thud_sh_status_updated_at ${updatedAt} \; set-option -p -t ${pane} ${runningStartedAtOption} ${runningStartedAt} \; set-option -p -t ${pane} @thud_sh_owner_pid ${owner.pid} \; set-option -p -t ${pane} @thud_sh_owner_start_time ${owner.startTime} \; set-option -pu -t ${pane} @thud_sh_status_label \; wait-for -S ${thudRefreshChannel}`.quiet();
+    await writePaneStatus($, {
+      owner,
+      pane,
+      runningStartedAt,
+      status,
+      updatedAt,
+    });
     return;
   }
 
   if (status === "idle") {
-    await $`tmux set-option -p -t ${pane} @thud_sh_tool ${tool} \; set-option -p -t ${pane} @thud_sh_status ${status} \; set-option -p -t ${pane} @thud_sh_status_updated_at ${updatedAt} \; set-option -pu -t ${pane} ${runningStartedAtOption} \; set-option -p -t ${pane} @thud_sh_owner_pid ${owner.pid} \; set-option -p -t ${pane} @thud_sh_owner_start_time ${owner.startTime} \; set-option -pu -t ${pane} @thud_sh_status_label \; wait-for -S ${thudRefreshChannel}`.quiet();
+    await writePaneStatus($, {
+      clearRunningStartedAt: true,
+      owner,
+      pane,
+      status,
+      updatedAt,
+    });
     return;
   }
 
-  await $`tmux set-option -p -t ${pane} @thud_sh_tool ${tool} \; set-option -p -t ${pane} @thud_sh_status ${status} \; set-option -p -t ${pane} @thud_sh_status_updated_at ${updatedAt} \; set-option -p -t ${pane} @thud_sh_owner_pid ${owner.pid} \; set-option -p -t ${pane} @thud_sh_owner_start_time ${owner.startTime} \; set-option -pu -t ${pane} @thud_sh_status_label \; wait-for -S ${thudRefreshChannel}`.quiet();
+  await writePaneStatus($, {
+    owner,
+    pane,
+    status,
+    turnId: event.turn_id,
+    updatedAt,
+  });
+
+  if (hookEventName === "PermissionRequest" && event.transcript_path && event.turn_id) {
+    startPermissionRequestWatcher({
+      owner,
+      pane,
+      statusUpdatedAt: updatedAt,
+      transcriptPath: event.transcript_path,
+      turnId: event.turn_id,
+    });
+  }
 }
 
 if (import.meta.main) {
-  await runThudCodexStatus({ $: Bun.$ });
+  if (Bun.argv[2] === permissionRequestWatchArg) {
+    await watchCodexPermissionRequest({
+      $: Bun.$,
+      owner: {
+        pid: Bun.argv[5] ?? "",
+        startTime: Bun.argv[6] ?? "",
+      },
+      pane: Bun.argv[3] ?? "",
+      statusUpdatedAt: Bun.argv[4] ?? "",
+      transcriptPath: Bun.argv[7] ?? "",
+      turnId: Bun.argv[8] ?? "",
+    });
+  } else {
+    await runThudCodexStatus({ $: Bun.$ });
+  }
+}
+
+async function writePaneStatus(
+  $: typeof Bun.$,
+  {
+    clearRunningStartedAt,
+    owner,
+    pane,
+    runningStartedAt,
+    status,
+    turnId,
+    updatedAt,
+  }: {
+    clearRunningStartedAt?: boolean;
+    owner: ProcessIdentity;
+    pane: string;
+    runningStartedAt?: string;
+    status: string;
+    turnId?: string;
+    updatedAt: string;
+  },
+): Promise<void> {
+  if (runningStartedAt) {
+    await $`tmux set-option -p -t ${pane} @thud_sh_tool ${tool} \; set-option -p -t ${pane} @thud_sh_status ${status} \; set-option -p -t ${pane} @thud_sh_status_updated_at ${updatedAt} \; set-option -p -t ${pane} ${runningStartedAtOption} ${runningStartedAt} \; set-option -p -t ${pane} @thud_sh_owner_pid ${owner.pid} \; set-option -p -t ${pane} @thud_sh_owner_start_time ${owner.startTime} \; set-option -pu -t ${pane} @thud_sh_status_label \; wait-for -S ${thudRefreshChannel}`.quiet();
+  } else if (clearRunningStartedAt) {
+    await $`tmux set-option -p -t ${pane} @thud_sh_tool ${tool} \; set-option -p -t ${pane} @thud_sh_status ${status} \; set-option -p -t ${pane} @thud_sh_status_updated_at ${updatedAt} \; set-option -pu -t ${pane} ${runningStartedAtOption} \; set-option -p -t ${pane} @thud_sh_owner_pid ${owner.pid} \; set-option -p -t ${pane} @thud_sh_owner_start_time ${owner.startTime} \; set-option -pu -t ${pane} @thud_sh_status_label \; wait-for -S ${thudRefreshChannel}`.quiet();
+  } else {
+    await $`tmux set-option -p -t ${pane} @thud_sh_tool ${tool} \; set-option -p -t ${pane} @thud_sh_status ${status} \; set-option -p -t ${pane} @thud_sh_status_updated_at ${updatedAt} \; set-option -p -t ${pane} @thud_sh_owner_pid ${owner.pid} \; set-option -p -t ${pane} @thud_sh_owner_start_time ${owner.startTime} \; set-option -pu -t ${pane} @thud_sh_status_label \; wait-for -S ${thudRefreshChannel}`.quiet();
+  }
+
+  if (turnId) {
+    await $`tmux set-option -p -t ${pane} @thud_sh_turn_id ${turnId}`.quiet();
+    return;
+  }
+
+  await $`tmux set-option -pu -t ${pane} @thud_sh_turn_id`.quiet();
+}
+
+function startDetachedPermissionRequestWatcher(request: PermissionRequestWatchRequest): void {
+  const runtime = Bun.argv[0] || process.execPath;
+  const script = Bun.argv[1];
+
+  if (!runtime || !script) {
+    return;
+  }
+
+  try {
+    const process = Bun.spawn(
+      [
+        runtime,
+        script,
+        permissionRequestWatchArg,
+        request.pane,
+        request.statusUpdatedAt,
+        request.owner.pid,
+        request.owner.startTime,
+        request.transcriptPath,
+        request.turnId,
+      ],
+      {
+        detached: true,
+        stderr: "ignore",
+        stdin: "ignore",
+        stdout: "ignore",
+      },
+    );
+
+    process.unref();
+  } catch {
+    return;
+  }
+}
+
+export async function watchCodexPermissionRequest({
+  $,
+  owner,
+  pane,
+  statusUpdatedAt,
+  transcriptPath,
+  turnId,
+}: PermissionRequestWatchRequest & { $: typeof Bun.$ }): Promise<void> {
+  if (!pane || !statusUpdatedAt || !transcriptPath || !turnId) {
+    return;
+  }
+
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < permissionRequestWatchTimeoutMs) {
+    if (!(await paneStillWaitingForPermissionRequest(pane, turnId, statusUpdatedAt))) {
+      return;
+    }
+
+    if (await transcriptHasTurnAborted(transcriptPath, turnId)) {
+      await writePaneStatus($, {
+        clearRunningStartedAt: true,
+        owner,
+        pane,
+        status: "idle",
+        updatedAt: Math.floor(Date.now() / 1000).toString(),
+      });
+      return;
+    }
+
+    await sleep(permissionRequestWatchPollMs);
+  }
+}
+
+async function paneStillWaitingForPermissionRequest(
+  pane: string,
+  turnId: string,
+  statusUpdatedAt: string,
+): Promise<boolean> {
+  const [currentStatus, currentStatusUpdatedAt, currentTurnId] = await Promise.all([
+    tmuxPaneOption(pane, "@thud_sh_status"),
+    tmuxPaneOption(pane, "@thud_sh_status_updated_at"),
+    tmuxPaneOption(pane, "@thud_sh_turn_id"),
+  ]);
+
+  return (
+    currentStatus === "waiting" &&
+    currentStatusUpdatedAt === statusUpdatedAt &&
+    currentTurnId === turnId
+  );
+}
+
+async function tmuxPaneOption(pane: string, option: string): Promise<string | undefined> {
+  let tmuxProcess: ReturnType<typeof Bun.spawn>;
+
+  try {
+    tmuxProcess = Bun.spawn(["tmux", "show-option", "-p", "-v", "-t", pane, option], {
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+  } catch {
+    return undefined;
+  }
+
+  const [exitCode, stdout] = await Promise.all([
+    tmuxProcess.exited,
+    new Response(tmuxProcess.stdout as ReadableStream<Uint8Array>).text(),
+  ]);
+
+  if (exitCode !== 0) {
+    return undefined;
+  }
+
+  return stdout.trim() || undefined;
+}
+
+export async function transcriptHasTurnAborted(
+  transcriptPath: string,
+  turnId: string,
+): Promise<boolean> {
+  let transcript: string;
+
+  try {
+    transcript = await readFile(transcriptPath, "utf8");
+  } catch {
+    return false;
+  }
+
+  return transcript.split(/\r?\n/).some((line) => transcriptLineAbortedTurn(line, turnId));
+}
+
+function transcriptLineAbortedTurn(line: string, turnId: string): boolean {
+  if (!line.trim()) {
+    return false;
+  }
+
+  try {
+    const event = JSON.parse(line) as {
+      type?: string;
+      payload?: {
+        type?: string;
+        turn_id?: string;
+      };
+    };
+
+    return (
+      event.type === "event_msg" &&
+      event.payload?.type === "turn_aborted" &&
+      event.payload.turn_id === turnId
+    );
+  } catch {
+    return false;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function readHookEvent(): Promise<CodexHookEvent> {

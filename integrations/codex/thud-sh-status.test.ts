@@ -2,7 +2,11 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { runThudCodexStatus } from "./thud-sh-status";
+import {
+  runThudCodexStatus,
+  transcriptHasTurnAborted,
+  watchCodexPermissionRequest,
+} from "./thud-sh-status";
 
 const originalPane = process.env.TMUX_PANE;
 const originalProcRoot = process.env.THUD_PROC_ROOT;
@@ -40,6 +44,39 @@ describe("runThudCodexStatus", () => {
     expect(shell.calls[0]).toContain("@thud_sh_tool codex");
     expect(shell.calls[0]).toContain("@thud_sh_status_updated_at 1710000000");
     expect(shell.calls[0]).toContain("set-option -pu -t %1 @thud_sh_status_label");
+  });
+
+  test("starts a watcher for rejected Codex permission request interrupts", async () => {
+    process.env.TMUX_PANE = "%1";
+    await mockProcessStartTime(process.ppid.toString(), "12345");
+    const shell = mockShell();
+    const requests: unknown[] = [];
+
+    await runThudCodexStatus({
+      $: shell.$ as typeof Bun.$,
+      now: () => 1_710_000_000_000,
+      readEvent: async () => ({
+        hook_event_name: "PermissionRequest",
+        transcript_path: "/tmp/codex-session.jsonl",
+        turn_id: "turn-1",
+      }),
+      startPermissionRequestWatcher: (request) => requests.push(request),
+    });
+
+    expect(statuses(shell.calls)).toEqual(["waiting"]);
+    expect(shell.calls[1]).toContain("@thud_sh_turn_id turn-1");
+    expect(requests).toEqual([
+      {
+        owner: {
+          pid: process.ppid.toString(),
+          startTime: "12345",
+        },
+        pane: "%1",
+        statusUpdatedAt: "1710000000",
+        transcriptPath: "/tmp/codex-session.jsonl",
+        turnId: "turn-1",
+      },
+    ]);
   });
 
   test("maps Codex lifecycle hooks to running and idle", async () => {
@@ -80,6 +117,106 @@ describe("runThudCodexStatus", () => {
     await runStatus("Stop", shell);
 
     expect(shell.calls[0]).toContain("set-option -pu -t %1 @thud_sh_running_started_at");
+  });
+
+  test("detects Codex turn aborts in transcripts", async () => {
+    procRoot = await mkdtemp(join(tmpdir(), "thud-codex-transcript-"));
+    const transcriptPath = join(procRoot, "session.jsonl");
+
+    await writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          type: "event_msg",
+          payload: { type: "turn_aborted", turn_id: "other-turn" },
+        }),
+        JSON.stringify({
+          type: "event_msg",
+          payload: { type: "turn_aborted", turn_id: "turn-1" },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    expect(await transcriptHasTurnAborted(transcriptPath, "turn-1")).toBe(true);
+    expect(await transcriptHasTurnAborted(transcriptPath, "turn-2")).toBe(false);
+  });
+
+  test("marks rejected permission request turns idle", async () => {
+    procRoot = await mkdtemp(join(tmpdir(), "thud-codex-transcript-"));
+    const transcriptPath = join(procRoot, "session.jsonl");
+    const shell = mockShell();
+
+    await writeFile(
+      transcriptPath,
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "turn_aborted", turn_id: "turn-1" },
+      }),
+      "utf8",
+    );
+
+    spyOn(Bun, "spawn").mockImplementation((command) => {
+      const args = Array.isArray(command) ? command : command.cmd;
+      const option = args.at(-1);
+      const value =
+        option === "@thud_sh_status"
+          ? "waiting"
+          : option === "@thud_sh_status_updated_at"
+            ? "1710000000"
+            : "turn-1";
+
+      return {
+        exited: Promise.resolve(0),
+        stderr: "",
+        stdout: `${value}\n`,
+      } as unknown as ReturnType<typeof Bun.spawn>;
+    });
+
+    await watchCodexPermissionRequest({
+      $: shell.$ as typeof Bun.$,
+      owner: { pid: "123", startTime: "456" },
+      pane: "%1",
+      statusUpdatedAt: "1710000000",
+      transcriptPath,
+      turnId: "turn-1",
+    });
+
+    expect(statuses(shell.calls)).toEqual(["idle"]);
+    expect(shell.calls[0]).toContain("set-option -pu -t %1 @thud_sh_running_started_at");
+    expect(shell.calls[1]).toContain("set-option -pu -t %1 @thud_sh_turn_id");
+  });
+
+  test("stops watching when permission request status changes", async () => {
+    const shell = mockShell();
+
+    spyOn(Bun, "spawn").mockImplementation((command) => {
+      const args = Array.isArray(command) ? command : command.cmd;
+      const option = args.at(-1);
+      const value =
+        option === "@thud_sh_status"
+          ? "running"
+          : option === "@thud_sh_status_updated_at"
+            ? "1710000001"
+            : "turn-1";
+
+      return {
+        exited: Promise.resolve(0),
+        stderr: "",
+        stdout: `${value}\n`,
+      } as unknown as ReturnType<typeof Bun.spawn>;
+    });
+
+    await watchCodexPermissionRequest({
+      $: shell.$ as typeof Bun.$,
+      owner: { pid: "123", startTime: "456" },
+      pane: "%1",
+      statusUpdatedAt: "1710000000",
+      transcriptPath: "/tmp/codex-session.jsonl",
+      turnId: "turn-1",
+    });
+
+    expect(shell.calls).toEqual([]);
   });
 
   test("ignores unknown events and missing panes", async () => {
