@@ -4,7 +4,7 @@ A tiny tmux HUD for keeping agent work visible.
 
 `thud` shows your tmux sessions, windows, panes, and agent status in one terminal view. Leave it open as a monitor, or invoke it for quick actions like jumping to the next pane that needs attention.
 
-<img width="3840" height="2160" alt="screenshot-2026-05-30_13-12-19" src="https://github.com/user-attachments/assets/ea8f26c6-6b1c-48f3-afa6-f2155a37dbe6" />
+<img width="3840" height="2160" alt="screenshot-2026-05-30_13-15-03" src="https://github.com/user-attachments/assets/a77dc7bb-da24-4c0a-8871-64ad5d77ccda" />
 
 ## Install
 
